@@ -2,12 +2,19 @@ const TelegramBot = require("node-telegram-bot-api");
 const { TelegramClient } = require("telegram");
 const { StringSession } = require("telegram/sessions");
 const mongoose = require("mongoose");
+const dotenv = require('dotenv').config()
+const express = require('express')
 
-const botToken = "7215312555:AAHDNFqUDmaAdTgpZ67B-ilgac7Mh4Jxzus";
+const app = express();
+
+const botToken = process.env.BOT_TOKEN;
 const bot = new TelegramBot(botToken, { polling: true });
 
-const apiId = 26958019; // Your API ID
-const apiHash = "e7d6928fbacac10dd0283b9aa3e79fcf"; // Your API Hash
+const apiId = process.env.API_ID; // Your API ID
+const apiHash = process.env.API_HASH; // Your API Hash
+
+
+
 
 // Static phone numbers with the new number added
 const phoneNumbers = [
@@ -20,10 +27,12 @@ const phoneNumbers = [
   "+998 97 400 24 04", // New phone number added here
 ];
    
-mongoose.connect("mongodb://127.0.0.1:27017/message-bot", {
+mongoose.connect(process.env.DB_URL, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 });
+
+
 
 const userSessionSchema = new mongoose.Schema({
   chatId: String,
@@ -51,6 +60,15 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model("User", userSchema);
 const UserSession = mongoose.model("UserSession", userSessionSchema);
+
+
+
+
+
+
+
+const webhookUrl = 'https://message-to-group-qato6xh2e-developersardors-projects.vercel.app'
+bot.setWebHook(webhookUrl);
 
 const previousSteps = {};
 
@@ -401,3 +419,10 @@ bot.on("message", async (msg) => {
 (async () => {
   await sendScheduledMessages();
 })();
+
+
+
+module.exports = async (req, res)=>{
+  await sendScheduledMessages();
+  res.status(200).send('Bot is running')
+}
