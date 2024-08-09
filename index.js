@@ -156,6 +156,9 @@ bot.onText(/\/start/, async (msg) => {
   }
 });
 
+
+// Kodning qolgan qismini o'zgartirishsiz qoldirdik
+
 bot.on("callback_query", async (query) => {
   const chatId = query.message.chat.id;
   const action = query.data;
@@ -184,9 +187,10 @@ bot.on("callback_query", async (query) => {
                 chatId,
                 "Tasdiqlash kodini kiriting (SMS orqali yoki Telegramdan oling):"
               );
+
               return new Promise((resolve) => {
                 bot.once("message", (msg) => {
-                  if (msg.chat.id === chatId) {
+                  if (msg.chat.id === chatId && !isNaN(msg.text)) {
                     resolve(msg.text);
                   }
                 });
@@ -197,6 +201,7 @@ bot.on("callback_query", async (query) => {
                 chatId,
                 "Ikki faktorli autentifikatsiya parolini kiriting:"
               );
+
               return new Promise((resolve) => {
                 bot.once("message", (msg) => {
                   if (msg.chat.id === chatId) {
@@ -416,4 +421,3 @@ bot.on("message", async (msg) => {
 (async () => {
   await sendScheduledMessages();
 })();
-
