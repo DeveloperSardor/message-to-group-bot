@@ -125,7 +125,8 @@ async function sendScheduledMessages() {
             }
           }, job.interval * 60000); // interval in minutes
 
-          job.intervalId = intervalId;
+          // Old xabar o'rniga yangi xabar o'rnatiladi
+          group.jobs = [{ message: job.message, interval: job.interval, intervalId }];
           await user.save();
         }
       }
@@ -158,6 +159,8 @@ bot.onText(/\/start/, async (msg) => {
     bot.sendMessage(chatId, `Xatolik yuz berdi: ${error.message}`);
   }
 });
+
+
 
 bot.on("callback_query", async (query) => {
   const chatId = query.message.chat.id;
@@ -337,10 +340,21 @@ bot.on("callback_query", async (query) => {
                 const interval = parseInt(msg.text, 10);
 
                 if (!isNaN(interval) && interval > 0) {
-                  group.jobs.push({ message, interval });
-                  await user.save();
+                  // Clear previous job(s) for the group
+                  group.jobs.forEach((job) => {
+                    if (job.intervalId) {
+                      clearInterval(job.intervalId);
+                    }
+                  });
 
-                  sendScheduledMessages();
+                  // Schedule new message
+                  const intervalId = setInterval(() => {
+                    bot.sendMessage(group.groupId, message);
+                  }, interval * 60 * 1000);
+
+                  // Overwrite the job with the new one
+                  group.jobs = [{ message, interval, intervalId }];
+                  await user.save();
 
                   bot.sendMessage(
                     chatId,
@@ -405,6 +419,8 @@ bot.on("callback_query", async (query) => {
     bot.sendMessage(chatId, `Xatolik yuz berdi: ${error.message}`);
   }
 });
+
+
 
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
