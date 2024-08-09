@@ -1,19 +1,12 @@
 const TelegramBot = require("node-telegram-bot-api");
+const mongoose = require("mongoose");
 const { TelegramClient } = require("telegram");
 const { StringSession } = require("telegram/sessions");
-const mongoose = require("mongoose");
-const dotenv = require('dotenv').config();
-const express = require('express');
 
-const app = express();
-
-const botToken = process.env.BOT_TOKEN;
-const bot = new TelegramBot(botToken, { polling: true });
-
-const apiId = parseInt(process.env.API_ID); // Your API ID
-const apiHash = process.env.API_HASH; // Your API Hash
-
-// Static phone numbers with the new number added
+// Replace with your own values
+const token = "YOUR_TELEGRAM_BOT_TOKEN";
+const apiId = "YOUR_API_ID";
+const apiHash = "YOUR_API_HASH";
 const phoneNumbers = [
   "+998 94 981 11 29",
   "+998 94 373 69 72",
@@ -21,107 +14,70 @@ const phoneNumbers = [
   "+998 94 511 11 29",
   "+998 94 202 61 57",
   "+998 97 007 37 47",
-  "+998 97 400 24 04", // New phone number added here
 ];
 
-mongoose.connect(process.env.DB_URL, {
+const bot = new TelegramBot(token, { polling: true });
+
+// MongoDB connection
+mongoose.connect("mongodb://localhost:27017/telegrambot", {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 });
 
-const userSessionSchema = new mongoose.Schema({
-  chatId: String,
-  sessionString: String,
-});
-
-const jobSchema = new mongoose.Schema({
-  message: String,
-  interval: Number,
-  intervalId: Number,
-});
-
-const groupSchema = new mongoose.Schema({
-  groupId: String,
-  name: String,
-  jobs: [jobSchema],
-});
-
+// Schema definitions
 const userSchema = new mongoose.Schema({
-  chatId: String,
+  chatId: Number,
   phoneNumber: String,
-  groups: [groupSchema],
-  session: userSessionSchema,
+  session: { type: mongoose.Schema.Types.ObjectId, ref: "UserSession" },
+  groups: [
+    {
+      groupId: String,
+      name: String,
+      jobs: [
+        {
+          message: String,
+          interval: Number,
+          intervalId: Number,
+        },
+      ],
+    },
+  ],
+});
+
+const userSessionSchema = new mongoose.Schema({
+  chatId: Number,
+  sessionString: String,
 });
 
 const User = mongoose.model("User", userSchema);
 const UserSession = mongoose.model("UserSession", userSessionSchema);
 
-const webhookUrl = 'https://message-to-group-qato6xh2e-developersardors-projects.vercel.app';
-bot.setWebHook(webhookUrl);
-
 const previousSteps = {};
 
-const getNavigationKeyboard = () => ({
-  reply_markup: {
-    keyboard: [[{ text: "Orqaga qaytish" }], [{ text: "Bosh menuga qaytish" }]],
-    resize_keyboard: true,
-  },
-});
+// Helper function to get the main menu inline keyboard
+function getInlineKeyboard() {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "Mavjud guruhlar", callback_data: "existing_groups" }],
+        [{ text: "Yangi guruh qo'shish", callback_data: "add_group" }],
+        [{ text: "Telefon raqamni o'zgartirish", callback_data: "switch_phone" }],
+      ],
+    },
+  };
+}
 
-const getInlineKeyboard = () => ({
-  reply_markup: {
-    inline_keyboard: [
-      [{ text: "Mavjud guruhlar", callback_data: "existing_groups" }],
-      [{ text: "Yangi guruh qo'shish", callback_data: "add_group" }],
-    ],
-  },
-});
-
+// Helper function to fetch group title
 async function fetchGroupTitle(client, groupId) {
   try {
-    const result = await client.invoke({
-      _: "getChat",
-      chat_id: groupId,
-    });
-    return result.title || result.username || groupId;
+    const chat = await client.getChat(groupId);
+    return chat.title;
   } catch (error) {
-    console.error(`Error fetching group title: ${error.message}`);
-    return groupId; // Fallback to groupId if title not available
+    return "Noma'lum guruh";
   }
 }
 
-async function sendScheduledMessages() {
-  const users = await User.find();
-  for (const user of users) {
-    for (const group of user.groups) {
-      for (const job of group.jobs) {
-        if (job.interval > 0) {
-          if (job.intervalId) {
-            clearInterval(job.intervalId);
-          }
-
-          const intervalId = setInterval(async () => {
-            try {
-              const client = new TelegramClient(
-                new StringSession(user.session.sessionString),
-                apiId,
-                apiHash
-              );
-              await client.connect();
-              await client.sendMessage(group.groupId, { message: job.message });
-            } catch (error) {
-              console.error(`Error sending message: ${error.message}`);
-            }
-          }, job.interval * 60000); // interval in minutes
-
-          job.intervalId = intervalId;
-          await user.save();
-        }
-      }
-    }
-  }
-}
-
+// Start command handler
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
 
@@ -148,6 +104,7 @@ bot.onText(/\/start/, async (msg) => {
   }
 });
 
+// Callback query handler
 bot.on("callback_query", async (query) => {
   const chatId = query.message.chat.id;
   const action = query.data;
@@ -162,11 +119,7 @@ bot.on("callback_query", async (query) => {
 
       let userSession = await UserSession.findOne({ chatId });
       if (!userSession) {
-        const client = new TelegramClient(
-          new StringSession(),
-          apiId,
-          apiHash
-        );
+        const client = new TelegramClient(new StringSession(), apiId, apiHash);
         await client.start({
           phoneNumber: async () => phoneNumber,
           phoneCode: async () => {
@@ -268,10 +221,10 @@ bot.on("callback_query", async (query) => {
         options: getInlineKeyboard(),
       });
 
+      bot.removeListener("message"); // Remove previous listeners
       bot.once("message", async (msg) => {
         const user = await User.findOne({ chatId });
         const group = user.groups.find((group) => group.groupId === groupId);
-        const interval = group.jobs[0]?.intervalId || 0;
         const message = msg.text;
 
         if (message === "Bosh menuga qaytish") {
@@ -285,6 +238,7 @@ bot.on("callback_query", async (query) => {
             `Yozmoqchi bo'lgan xabaringiz: "${message}". Takrorlanish intervalini (minutlarda) kiriting:`
           );
 
+          bot.removeListener("message"); // Remove previous listeners
           bot.once("message", async (msg) => {
             const interval = parseInt(msg.text, 10);
 
@@ -333,51 +287,71 @@ bot.on("callback_query", async (query) => {
 
       bot.sendMessage(chatId, "Guruh o'chirildi.", getInlineKeyboard());
     } else if (action === "add_group") {
-      bot.sendMessage(chatId, "Guruh ID raqamini kiriting:", getNavigationKeyboard());
+      bot.sendMessage(chatId, "Guruh ID raqamini kiriting:");
 
-      previousSteps[chatId].push({ text: query.message.text, options: getInlineKeyboard() });
+      previousSteps[chatId].push({
+        text: query.message.text,
+        options: getInlineKeyboard(),
+      });
 
+      bot.removeListener("message"); // Remove previous listeners
       bot.once("message", async (msg) => {
         const groupId = msg.text;
+
         const user = await User.findOne({ chatId });
 
-        const client = new TelegramClient(
-          new StringSession(user.session.sessionString),
-          apiId,
-          apiHash
-        );
-        await client.connect();
-
-        const groupName = await fetchGroupTitle(client, groupId);
-        const existingGroup = user.groups.find((group) => group.groupId === groupId);
-
-        if (existingGroup) {
-          bot.sendMessage(chatId, "Bu guruh avvaldan mavjud.");
+        if (user.groups.some((group) => group.groupId === groupId)) {
+          bot.sendMessage(
+            chatId,
+            "Bu guruh allaqachon mavjud.",
+            getInlineKeyboard()
+          );
         } else {
+          const client = new TelegramClient(
+            new StringSession(user.session.sessionString),
+            apiId,
+            apiHash
+          );
+          await client.connect();
+
+          const groupName = await fetchGroupTitle(client, groupId);
+
           user.groups.push({ groupId, name: groupName, jobs: [] });
           await user.save();
 
           bot.sendMessage(
             chatId,
-            `Yangi guruh qo'shildi: ${groupName} (${groupId}). Asosiy menyu:`,
+            `Yangi guruh qo'shildi: ${groupName}`,
             getInlineKeyboard()
           );
         }
       });
+    } else if (action === "switch_phone") {
+      // Handle phone number switching
+      const options = {
+        reply_markup: {
+          inline_keyboard: phoneNumbers.map((phone) => [
+            { text: phone, callback_data: phone },
+          ]),
+        },
+      };
+
+      previousSteps[chatId].push({
+        text: query.message.text,
+        options: getInlineKeyboard(),
+      });
+
+      bot.sendMessage(chatId, "Telefon raqamni tanlang:", options);
     } else if (action === "back") {
       const previousStep = previousSteps[chatId].pop();
-      bot.sendMessage(chatId, previousStep.text, previousStep.options);
+
+      if (previousStep) {
+        bot.sendMessage(chatId, previousStep.text, previousStep.options);
+      } else {
+        bot.sendMessage(chatId, "Asosiy menyu", getInlineKeyboard());
+      }
     }
   } catch (error) {
-    console.error(`Callback query error: ${error.message}`);
+    bot.sendMessage(chatId, `Xatolik yuz berdi: ${error.message}`);
   }
 });
-
-app.post('/webhook', (req, res) => {
-  bot.processUpdate(req.body);
-  res.sendStatus(200);
-});
-
-sendScheduledMessages();
-
-module.exports = app;
