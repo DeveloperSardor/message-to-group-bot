@@ -12,7 +12,8 @@ const bot = new TelegramBot(botToken, { polling: true });
 const apiId = process.env.API_ID; // Your API ID
 const apiHash = process.env.API_HASH; // Your API Hash
 
-
+const webhookUrl = 'https://your-vercel-url.vercel.app/';
+bot.setWebHook(webhookUrl);
 
 const phoneNumbers = [
   "+998 94 981 11 29",
@@ -296,21 +297,19 @@ bot.on("callback_query", async (query) => {
           }
         }
       });
-    } else if (action.startsWith("group_")) {
+    } else if (action.startsWith("delete_")) {
       const groupId = action.split("_")[1];
-      bot.sendMessage(
-        chatId,
-        `Guruh uchun nima qilishni xohlaysiz?`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "Xabar yuborish", callback_data: `send_message_${groupId}` }],
-              [{ text: "To'xtatish", callback_data: `stop_${groupId}` }],
-              [{ text: "Orqaga qaytish", callback_data: "back" }],
-            ],
-          },
-        }
-      );
+
+      const user = await User.findOne({ chatId });
+
+      if (user) {
+        user.groups = user.groups.filter((group) => group.groupId !== groupId);
+        await user.save();
+
+        bot.sendMessage(chatId, "Guruh o'chirildi.", getInlineKeyboard());
+      } else {
+        bot.sendMessage(chatId, "Avval telefon raqamingizni tasdiqlang.");
+      }
     } else if (action.startsWith("send_message_")) {
       const groupId = action.split("_")[2];
 
@@ -338,6 +337,15 @@ bot.on("callback_query", async (query) => {
               const group = user.groups.find((g) => g.groupId === groupId);
 
               if (group) {
+                // Clear old interval jobs
+                for (const job of group.jobs) {
+                  if (job.intervalId) {
+                    clearInterval(job.intervalId);
+                    job.intervalId = null;
+                  }
+                }
+
+                // Add new job
                 group.jobs.push({ message, interval });
                 await user.save();
 
@@ -357,12 +365,14 @@ bot.on("callback_query", async (query) => {
       const group = user.groups.find((g) => g.groupId === groupId);
 
       if (group) {
+        // Clear all intervals for the group
         for (const job of group.jobs) {
           if (job.intervalId) {
             clearInterval(job.intervalId);
             job.intervalId = null;
           }
         }
+
         await user.save();
         bot.sendMessage(chatId, "Xabar yuborilishi to'xtatildi.");
       } else {
