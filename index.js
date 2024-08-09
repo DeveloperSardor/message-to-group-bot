@@ -1,12 +1,22 @@
 const TelegramBot = require("node-telegram-bot-api");
-const mongoose = require("mongoose");
 const { TelegramClient } = require("telegram");
 const { StringSession } = require("telegram/sessions");
+const mongoose = require("mongoose");
+const dotenv = require('dotenv').config()
+const express = require('express')
 
-// Replace with your own values
-const token = process.env.BOT_TOKEN;
-const apiId = parseInt(process.env.API_ID);
-const apiHash = "YOUR_API_HASH";
+const app = express();
+
+const botToken = process.env.BOT_TOKEN;
+const bot = new TelegramBot(botToken, { polling: true });
+
+const apiId = process.env.API_ID; // Your API ID
+const apiHash = process.env.API_HASH; // Your API Hash
+
+
+
+
+// Static phone numbers with the new number added
 const phoneNumbers = [
   "+998 94 981 11 29",
   "+998 94 373 69 72",
@@ -14,70 +24,115 @@ const phoneNumbers = [
   "+998 94 511 11 29",
   "+998 94 202 61 57",
   "+998 97 007 37 47",
+  "+998 97 400 24 04", // New phone number added here
 ];
-
-const bot = new TelegramBot(token, { polling: true });
-
-// MongoDB connection
+   
 mongoose.connect(process.env.DB_URL, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 });
 
-// Schema definitions
-const userSchema = new mongoose.Schema({
-  chatId: Number,
-  phoneNumber: String,
-  session: { type: mongoose.Schema.Types.ObjectId, ref: "UserSession" },
-  groups: [
-    {
-      groupId: String,
-      name: String,
-      jobs: [
-        {
-          message: String,
-          interval: Number,
-          intervalId: Number,
-        },
-      ],
-    },
-  ],
-});
+
 
 const userSessionSchema = new mongoose.Schema({
-  chatId: Number,
+  chatId: String,
   sessionString: String,
+});
+
+const jobSchema = new mongoose.Schema({
+  message: String,
+  interval: Number,
+  intervalId: Number,
+});
+
+const groupSchema = new mongoose.Schema({
+  groupId: String,
+  name: String,
+  jobs: [jobSchema],
+});
+
+const userSchema = new mongoose.Schema({
+  chatId: String,
+  phoneNumber: String,
+  groups: [groupSchema],
+  session: userSessionSchema,
 });
 
 const User = mongoose.model("User", userSchema);
 const UserSession = mongoose.model("UserSession", userSessionSchema);
 
+
+
+
+
+
+
+const webhookUrl = 'https://message-to-group-qato6xh2e-developersardors-projects.vercel.app'
+bot.setWebHook(webhookUrl);
+
 const previousSteps = {};
 
-// Helper function to get the main menu inline keyboard
-function getInlineKeyboard() {
-  return {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: "Mavjud guruhlar", callback_data: "existing_groups" }],
-        [{ text: "Yangi guruh qo'shish", callback_data: "add_group" }],
-        [{ text: "Telefon raqamni o'zgartirish", callback_data: "switch_phone" }],
-      ],
-    },
-  };
-}
+const getNavigationKeyboard = () => ({
+  reply_markup: {
+    keyboard: [[{ text: "Orqaga qaytish" }], [{ text: "Bosh menuga qaytish" }]],
+    resize_keyboard: true,
+  },
+});
 
-// Helper function to fetch group title
+const getInlineKeyboard = () => ({
+  reply_markup: {
+    inline_keyboard: [
+      [{ text: "Mavjud guruhlar", callback_data: "existing_groups" }],
+      [{ text: "Yangi guruh qo'shish", callback_data: "add_group" }],
+    ],
+  },
+});
+
 async function fetchGroupTitle(client, groupId) {
   try {
-    const chat = await client.getChat(groupId);
-    return chat.title;
+    const result = await client.invoke({
+      _: "getChat",
+      chat_id: groupId,
+    });
+    return result.title || result.username || groupId;
   } catch (error) {
-    return "Noma'lum guruh";
+    console.error(`Error fetching group title: ${error.message}`);
+    return groupId;
   }
 }
 
-// Start command handler
+async function sendScheduledMessages() {
+  const users = await User.find();
+  for (const user of users) {
+    for (const group of user.groups) {
+      for (const job of group.jobs) {
+        if (job.interval > 0) {
+          if (job.intervalId) {
+            clearInterval(job.intervalId);
+          }
+
+          const intervalId = setInterval(async () => {
+            try {
+              const client = new TelegramClient(
+                new StringSession(user.session.sessionString),
+                apiId,
+                apiHash
+              );
+              await client.connect();
+              await client.sendMessage(group.groupId, { message: job.message });
+            } catch (error) {
+              console.error(`Error sending message: ${error.message}`);
+            }
+          }, job.interval * 60000); // interval in minutes
+
+          job.intervalId = intervalId;
+          await user.save();
+        }
+      }
+    }
+  }
+}
+
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
 
@@ -104,13 +159,9 @@ bot.onText(/\/start/, async (msg) => {
   }
 });
 
-// Callback query handler
 bot.on("callback_query", async (query) => {
   const chatId = query.message.chat.id;
   const action = query.data;
-
-  // Clear any previous listeners before setting new ones
-  bot.removeAllListeners("message");
 
   if (!previousSteps[chatId]) {
     previousSteps[chatId] = [];
@@ -120,48 +171,55 @@ bot.on("callback_query", async (query) => {
     if (phoneNumbers.includes(action)) {
       const phoneNumber = action;
 
-      let userSession = await UserSession.findOne({ chatId });
-      if (!userSession) {
-        const client = new TelegramClient(new StringSession(), apiId, apiHash);
-        await client.start({
-          phoneNumber: async () => phoneNumber,
-          phoneCode: async () => {
-            bot.sendMessage(
-              chatId,
-              "Tasdiqlash kodini kiriting (SMS orqali yoki Telegramdan oling):"
-            );
-            return new Promise((resolve) => {
-              bot.once("message", (msg) => {
-                if (msg.chat.id === chatId) {
-                  resolve(msg.text);
-                }
+      let user = await User.findOne({ phoneNumber });
+      if (!user) {
+        let userSession = await UserSession.findOne({ chatId });
+        if (!userSession) {
+          const client = new TelegramClient(
+            new StringSession(),
+            apiId,
+            apiHash
+          );
+          await client.start({
+            phoneNumber: async () => phoneNumber,
+            phoneCode: async () => {
+              bot.sendMessage(
+                chatId,
+                "Tasdiqlash kodini kiriting (SMS orqali yoki Telegramdan oling):"
+              );
+              return new Promise((resolve) => {
+                bot.once("message", (msg) => {
+                  if (msg.chat.id === chatId) {
+                    resolve(msg.text);
+                  }
+                });
               });
-            });
-          },
-          password: async () => {
-            bot.sendMessage(
-              chatId,
-              "Ikki faktorli autentifikatsiya parolini kiriting:"
-            );
-            return new Promise((resolve) => {
-              bot.once("message", (msg) => {
-                if (msg.chat.id === chatId) {
-                  resolve(msg.text);
-                }
+            },
+            password: async () => {
+              bot.sendMessage(
+                chatId,
+                "Ikki faktorli autentifikatsiya parolini kiriting:"
+              );
+              return new Promise((resolve) => {
+                bot.once("message", (msg) => {
+                  if (msg.chat.id === chatId) {
+                    resolve(msg.text);
+                  }
+                });
               });
-            });
-          },
-          onError: (err) => {
-            bot.sendMessage(chatId, `Xatolik yuz berdi: ${err.message}`);
-          },
-        });
-        userSession = new UserSession({
-          chatId,
-          sessionString: client.session.save(),
-        });
-        await userSession.save();
+            },
+            onError: (err) => {
+              bot.sendMessage(chatId, `Xatolik yuz berdi: ${err.message}`);
+            },
+          });
+          userSession = new UserSession({
+            chatId,
+            sessionString: client.session.save(),
+          });
+          await userSession.save();
+        }
 
-        const user = new User({ chatId, phoneNumber, session: userSession });
+        user = new User({ chatId, phoneNumber, session: userSession });
         await user.save();
 
         bot.sendMessage(
@@ -206,151 +264,165 @@ bot.on("callback_query", async (query) => {
 
       previousSteps[chatId].push({ text: query.message.text, options: getInlineKeyboard() });
       bot.sendMessage(chatId, "Mavjud guruhlar:", options);
+    } else if (action === "add_group") {
+      previousSteps[chatId].push({ text: query.message.text, options: getInlineKeyboard() });
+
+      bot.sendMessage(
+        chatId,
+        "Yangi guruh ID sini kiriting:",
+        getNavigationKeyboard()
+      );
+
+      bot.once("message", async (msg) => {
+        if (msg.chat.id === chatId) {
+          const groupId = msg.text;
+
+          const user = await User.findOne({ chatId });
+
+          if (user) {
+            const client = new TelegramClient(
+              new StringSession(user.session.sessionString),
+              apiId,
+              apiHash
+            );
+            await client.connect();
+
+            const groupName = await fetchGroupTitle(client, groupId);
+
+            // Yangi guruh qo'shamiz
+            user.groups.push({
+              groupId,
+              name: groupName,
+              jobs: [],
+            });
+            await user.save();
+
+            bot.sendMessage(
+              chatId,
+              `Yangi guruh qo'shildi: ${groupName} (${groupId})`,
+              getInlineKeyboard()
+            );
+          } else {
+            bot.sendMessage(chatId, "Foydalanuvchi topilmadi.");
+          }
+        }
+      });
     } else if (action.startsWith("group_")) {
       const groupId = action.split("_")[1];
 
-      bot.sendMessage(chatId, "Yozmoqchi bo'lgan xabaringizni kiriting:", {
-        reply_markup: {
-          keyboard: [
-            [{ text: "Bosh menuga qaytish" }],
-            [{ text: "Orqaga qaytish" }],
-          ],
-          resize_keyboard: true,
-        },
-      });
+      const user = await User.findOne({ chatId });
+      const group = user.groups.find((g) => g.groupId === groupId);
 
-      previousSteps[chatId].push({
-        text: query.message.text,
-        options: getInlineKeyboard(),
-      });
+      if (group) {
+        previousSteps[chatId].push({ text: query.message.text, options: getInlineKeyboard() });
 
-      bot.once("message", async (msg) => {
-        const user = await User.findOne({ chatId });
-        const group = user.groups.find((group) => group.groupId === groupId);
-        const message = msg.text;
+        bot.sendMessage(
+          chatId,
+          `Guruh: ${group.name} (${group.groupId})\nXabar matnini kiriting:`,
+          getNavigationKeyboard()
+        );
 
-        if (message === "Bosh menuga qaytish") {
-          bot.sendMessage(chatId, "Asosiy menyu:", getInlineKeyboard());
-        } else if (message === "Orqaga qaytish") {
-          const previousStep = previousSteps[chatId].pop();
-          bot.sendMessage(chatId, previousStep.text, previousStep.options);
-        } else {
-          bot.sendMessage(
-            chatId,
-            `Yozmoqchi bo'lgan xabaringiz: "${message}". Takrorlanish intervalini (minutlarda) kiriting:`
-          );
+        bot.once("message", async (msg) => {
+          if (msg.chat.id === chatId) {
+            const message = msg.text;
 
-          bot.once("message", async (msg) => {
-            const interval = parseInt(msg.text, 10);
+            bot.sendMessage(
+              chatId,
+              `Xabar intervallarini daqiqalarda kiriting (masalan, 5):`,
+              getNavigationKeyboard()
+            );
 
-            if (isNaN(interval) || interval <= 0) {
-              bot.sendMessage(
-                chatId,
-                "Iltimos, to'g'ri vaqt intervalini kiriting (minutlarda)."
-              );
-            } else {
-              // Clear any previous interval
-              if (group.jobs[0]?.intervalId) {
-                clearInterval(group.jobs[0].intervalId);
+            bot.once("message", async (msg) => {
+              if (msg.chat.id === chatId) {
+                const interval = parseInt(msg.text, 10);
+
+                if (!isNaN(interval) && interval > 0) {
+                  group.jobs.push({ message, interval });
+                  await user.save();
+
+                  sendScheduledMessages();
+
+                  bot.sendMessage(
+                    chatId,
+                    `Xabar muvaffaqiyatli qo'shildi va ${interval} daqiqada jo'natiladi.`,
+                    getNavigationKeyboard()
+                  );
+                } else {
+                  bot.sendMessage(chatId, "Noto'g'ri interval kiritildi.");
+                }
               }
-
-              group.jobs = [
-                {
-                  message,
-                  interval,
-                  intervalId: setInterval(async () => {
-                    try {
-                      await client.sendMessage(groupId, { message });
-                    } catch (error) {
-                      console.error(`Error sending message: ${error.message}`);
-                    }
-                  }, interval * 60000), // interval in minutes
-                },
-              ];
-
-              await user.save();
-
-              bot.sendMessage(
-                chatId,
-                "Xabaringiz saqlandi va ko'rsatilgan intervalda yuboriladi."
-              );
-            }
-          });
-        }
-      });
+            });
+          }
+        });
+      } else {
+        bot.sendMessage(chatId, "Guruh topilmadi.");
+      }
     } else if (action.startsWith("delete_")) {
       const groupId = action.split("_")[1];
-      const user = await User.findOne({ chatId });
 
-      user.groups = user.groups.filter((group) => group.groupId !== groupId);
+      const user = await User.findOne({ chatId });
+      user.groups = user.groups.filter((g) => g.groupId !== groupId);
       await user.save();
 
-      bot.sendMessage(chatId, "Guruh o'chirildi.", getInlineKeyboard());
-    } else if (action === "add_group") {
-      bot.sendMessage(chatId, "Guruh ID ni kiriting:");
+      bot.sendMessage(
+        chatId,
+        `Guruh o'chirildi: ${groupId}`,
+        getInlineKeyboard()
+      );
+    } else if (action.startsWith("stop_")) {
+      const groupId = action.split("_")[1];
 
-      previousSteps[chatId].push({
-        text: query.message.text,
-        options: getInlineKeyboard(),
-      });
+      const user = await User.findOne({ chatId });
+      const group = user.groups.find((g) => g.groupId === groupId);
 
-      bot.once("message", async (msg) => {
-        const groupId = msg.text;
+      if (group) {
+        group.jobs.forEach((job) => {
+          if (job.intervalId) {
+            clearInterval(job.intervalId);
+            job.intervalId = null;
+          }
+        });
 
-        const user = await User.findOne({ chatId });
+        await user.save();
 
-        if (user.groups.some((group) => group.groupId === groupId)) {
-          bot.sendMessage(
-            chatId,
-            "Bu guruh allaqachon mavjud.",
-            getInlineKeyboard()
-          );
-        } else {
-          const client = new TelegramClient(
-            new StringSession(user.session.sessionString),
-            apiId,
-            apiHash
-          );
-          await client.connect();
-
-          const groupName = await fetchGroupTitle(client, groupId);
-
-          user.groups.push({ groupId, name: groupName, jobs: [] });
-          await user.save();
-
-          bot.sendMessage(
-            chatId,
-            `Yangi guruh qo'shildi: ${groupName}`,
-            getInlineKeyboard()
-          );
-        }
-      });
-    } else if (action === "switch_phone") {
-      // Handle phone number switching
-      const options = {
-        reply_markup: {
-          inline_keyboard: phoneNumbers.map((phone) => [
-            { text: phone, callback_data: phone },
-          ]),
-        },
-      };
-
-      previousSteps[chatId].push({
-        text: query.message.text,
-        options: getInlineKeyboard(),
-      });
-
-      bot.sendMessage(chatId, "Telefon raqamni tanlang:", options);
+        bot.sendMessage(
+          chatId,
+          `Guruh uchun barcha avtomatik xabarlar to'xtatildi: ${groupId}`,
+          getInlineKeyboard()
+        );
+      } else {
+        bot.sendMessage(chatId, "Guruh topilmadi.");
+      }
     } else if (action === "back") {
       const previousStep = previousSteps[chatId].pop();
-
       if (previousStep) {
         bot.sendMessage(chatId, previousStep.text, previousStep.options);
       } else {
-        bot.sendMessage(chatId, "Asosiy menyu", getInlineKeyboard());
+        bot.sendMessage(chatId, "Ortga qaytadigan joy topilmadi.");
       }
     }
   } catch (error) {
     bot.sendMessage(chatId, `Xatolik yuz berdi: ${error.message}`);
   }
 });
+
+bot.on("message", async (msg) => {
+  const chatId = msg.chat.id;
+  const text = msg.text;
+
+  if (text === "Orqaga qaytish" || text === "Bosh menuga qaytish") {
+    previousSteps[chatId] = [];
+    bot.sendMessage(chatId, "Asosiy menyu", getInlineKeyboard());
+  }
+});
+
+(async () => {
+  await sendScheduledMessages();
+})();
+
+
+
+module.exports = async (req, res)=>{
+  await sendScheduledMessages();
+  res.status(200).send('Bot is running')
+}
