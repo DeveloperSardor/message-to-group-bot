@@ -157,6 +157,7 @@ bot.onText(/\/start/, async (msg) => {
 });
 
 
+
 // Kodning qolgan qismini o'zgartirishsiz qoldirdik
 
 bot.on("callback_query", async (query) => {
