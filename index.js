@@ -23,7 +23,7 @@ const phoneNumbers = [
   "+998 97 007 37 47",
   "+998 97 400 24 04", // New phone number added here
 ];
-   
+
 mongoose.connect(process.env.DB_URL, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
@@ -160,55 +160,52 @@ bot.on("callback_query", async (query) => {
     if (phoneNumbers.includes(action)) {
       const phoneNumber = action;
 
-      let user = await User.findOne({ phoneNumber });
-      if (!user) {
-        let userSession = await UserSession.findOne({ chatId });
-        if (!userSession) {
-          const client = new TelegramClient(
-            new StringSession(),
-            apiId,
-            apiHash
-          );
-          await client.start({
-            phoneNumber: async () => phoneNumber,
-            phoneCode: async () => {
-              bot.sendMessage(
-                chatId,
-                "Tasdiqlash kodini kiriting (SMS orqali yoki Telegramdan oling):"
-              );
-              return new Promise((resolve) => {
-                bot.once("message", (msg) => {
-                  if (msg.chat.id === chatId) {
-                    resolve(msg.text);
-                  }
-                });
+      let userSession = await UserSession.findOne({ chatId });
+      if (!userSession) {
+        const client = new TelegramClient(
+          new StringSession(),
+          apiId,
+          apiHash
+        );
+        await client.start({
+          phoneNumber: async () => phoneNumber,
+          phoneCode: async () => {
+            bot.sendMessage(
+              chatId,
+              "Tasdiqlash kodini kiriting (SMS orqali yoki Telegramdan oling):"
+            );
+            return new Promise((resolve) => {
+              bot.once("message", (msg) => {
+                if (msg.chat.id === chatId) {
+                  resolve(msg.text);
+                }
               });
-            },
-            password: async () => {
-              bot.sendMessage(
-                chatId,
-                "Ikki faktorli autentifikatsiya parolini kiriting:"
-              );
-              return new Promise((resolve) => {
-                bot.once("message", (msg) => {
-                  if (msg.chat.id === chatId) {
-                    resolve(msg.text);
-                  }
-                });
+            });
+          },
+          password: async () => {
+            bot.sendMessage(
+              chatId,
+              "Ikki faktorli autentifikatsiya parolini kiriting:"
+            );
+            return new Promise((resolve) => {
+              bot.once("message", (msg) => {
+                if (msg.chat.id === chatId) {
+                  resolve(msg.text);
+                }
               });
-            },
-            onError: (err) => {
-              bot.sendMessage(chatId, `Xatolik yuz berdi: ${err.message}`);
-            },
-          });
-          userSession = new UserSession({
-            chatId,
-            sessionString: client.session.save(),
-          });
-          await userSession.save();
-        }
+            });
+          },
+          onError: (err) => {
+            bot.sendMessage(chatId, `Xatolik yuz berdi: ${err.message}`);
+          },
+        });
+        userSession = new UserSession({
+          chatId,
+          sessionString: client.session.save(),
+        });
+        await userSession.save();
 
-        user = new User({ chatId, phoneNumber, session: userSession });
+        const user = new User({ chatId, phoneNumber, session: userSession });
         await user.save();
 
         bot.sendMessage(
