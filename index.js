@@ -12,8 +12,7 @@ const bot = new TelegramBot(botToken, { polling: true });
 const apiId = process.env.API_ID; // Your API ID
 const apiHash = process.env.API_HASH; // Your API Hash
 
-const webhookUrl = 'https://your-vercel-url.vercel.app/';
-bot.setWebHook(webhookUrl);
+
 
 const phoneNumbers = [
   "+998 94 981 11 29",
