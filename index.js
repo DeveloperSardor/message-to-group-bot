@@ -4,8 +4,8 @@ const { TelegramClient } = require("telegram");
 const { StringSession } = require("telegram/sessions");
 
 // Replace with your own values
-const token = "YOUR_TELEGRAM_BOT_TOKEN";
-const apiId = "YOUR_API_ID";
+const token = process.env.BOT_TOKEN;
+const apiId = parseInt(process.env.API_ID);
 const apiHash = "YOUR_API_HASH";
 const phoneNumbers = [
   "+998 94 981 11 29",
@@ -19,7 +19,7 @@ const phoneNumbers = [
 const bot = new TelegramBot(token, { polling: true });
 
 // MongoDB connection
-mongoose.connect("mongodb://localhost:27017/telegrambot", {
+mongoose.connect(process.env.DB_URL, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 });
@@ -108,6 +108,9 @@ bot.onText(/\/start/, async (msg) => {
 bot.on("callback_query", async (query) => {
   const chatId = query.message.chat.id;
   const action = query.data;
+
+  // Clear any previous listeners before setting new ones
+  bot.removeAllListeners("message");
 
   if (!previousSteps[chatId]) {
     previousSteps[chatId] = [];
@@ -221,7 +224,6 @@ bot.on("callback_query", async (query) => {
         options: getInlineKeyboard(),
       });
 
-      bot.removeListener("message"); // Remove previous listeners
       bot.once("message", async (msg) => {
         const user = await User.findOne({ chatId });
         const group = user.groups.find((group) => group.groupId === groupId);
@@ -238,7 +240,6 @@ bot.on("callback_query", async (query) => {
             `Yozmoqchi bo'lgan xabaringiz: "${message}". Takrorlanish intervalini (minutlarda) kiriting:`
           );
 
-          bot.removeListener("message"); // Remove previous listeners
           bot.once("message", async (msg) => {
             const interval = parseInt(msg.text, 10);
 
@@ -282,19 +283,17 @@ bot.on("callback_query", async (query) => {
       const user = await User.findOne({ chatId });
 
       user.groups = user.groups.filter((group) => group.groupId !== groupId);
-
       await user.save();
 
       bot.sendMessage(chatId, "Guruh o'chirildi.", getInlineKeyboard());
     } else if (action === "add_group") {
-      bot.sendMessage(chatId, "Guruh ID raqamini kiriting:");
+      bot.sendMessage(chatId, "Guruh ID ni kiriting:");
 
       previousSteps[chatId].push({
         text: query.message.text,
         options: getInlineKeyboard(),
       });
 
-      bot.removeListener("message"); // Remove previous listeners
       bot.once("message", async (msg) => {
         const groupId = msg.text;
 
