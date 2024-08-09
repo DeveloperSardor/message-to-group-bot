@@ -67,9 +67,6 @@ const UserSession = mongoose.model("UserSession", userSessionSchema);
 
 
 
-const webhookUrl = 'https://message-to-group-qato6xh2e-developersardors-projects.vercel.app'
-bot.setWebHook(webhookUrl);
-
 const previousSteps = {};
 
 const getNavigationKeyboard = () => ({
@@ -420,9 +417,3 @@ bot.on("message", async (msg) => {
   await sendScheduledMessages();
 })();
 
-
-
-module.exports = async (req, res)=>{
-  await sendScheduledMessages();
-  res.status(200).send('Bot is running')
-}
